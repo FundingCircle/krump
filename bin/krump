@@ -1,0 +1,210 @@
+#!/usr/bin/env ruby
+require 'net/ssh'
+require 'trollop'
+require 'krump/config_parser'
+require 'krump/kafka_consumer'
+require 'krump/ssh_tunnels'
+
+
+def init_config
+  cmd_line_opts = parse_opts
+  config = Krump::ConfigParser.new(cmd_line_opts[:config_file],
+                                     cmd_line_opts[:environment]).parse
+
+  # Command line options will supercede those in the config file
+  cmd_line_opts.keys.each do |key|
+    config[key] = cmd_line_opts[key] unless cmd_line_opts[key].nil?
+  end
+
+  if config[:gateway_host]
+    host_config = Net::SSH::Config.for(config[:gateway_host])
+    config[:gateway_hostname] = host_config[:host_name]
+    config[:gateway_user] = host_config[:user]
+    config[:gateway_identityfile] = host_config[:keys].first
+  end
+
+  set_defaults!(config)
+  config
+end
+
+
+def parse_opts
+  opts = Trollop::options do
+    opt :brokers, 'List (space separated) of Kafka brokers', :type => :strings
+    opt :topic, 'Kafka topic', :type => :string, :required => true
+    opt :partitions, 'List (space separated) of partions to consider', :type => :integers,
+        :default => []
+    opt :offset, 'Print messages starting from this offset (use a negative offset for the ' +
+        'most recent n messages)', :default => -10
+    opt :earliest_offset, 'Print messages starting from the earliest offset'
+    opt :latest_offset, 'Print messages starting from most recent offset'
+    opt :read_count, 'Max number of messages to read (exits after reading currently ' +
+        'available messages even if this number is not reached)', :type => :integer
+    opt :print_offset, 'Include offset number in output'
+    opt :dump, 'Exit after printing the available messages'
+    opt :count_messages, 'Display the number of messages on a topic'
+    opt :config_file, 'File containing environment settings', :default => '~/.krump'
+    opt :environment, 'rc', :type => :string
+    opt :gateway_host, 'Host alias (from SSH config file) for gateway server in front of the ' +
+        'Kafka cluster', :type => :string
+    opt :gateway_hostname, 'Hostname for gateway server in front of the Kafka cluster',
+        :type => :string
+    opt :gateway_user, 'User for gateway server in front of the Kafka cluster',
+        :type => :string
+    opt :gateway_identityfile, 'Path to key pair for gateway server in front of the Kafka ' +
+        'cluster', :type => :string
+    opt :skip_header, "Don't print header showing the partition and offset for a given group " +
+        'of messages'
+    conflicts :offset, :earliest_offset, :latest_offset, :count_messages
+    conflicts :dump, :read_count, :count_messages
+    conflicts :gateway_host, :gateway_hostname
+    conflicts :gateway_host, :gateway_user
+    conflicts :gateway_host, :gateway_identityfile
+  end
+
+  opts[:offset] = :earliest_offset if opts[:earliest_offset] || opts[:count_messages]
+  opts[:offset] = :latest_offset if opts[:latest_offset]
+  opts
+end
+
+
+# Normally you'd set defaults in the Trollop::options block. However, we want
+# the command line options to supercede those in the config file, but not if
+# the command line option is just the default (not explicitly set).
+def set_defaults!(config)
+  config[:brokers] ||= ['localhost:9092']
+  config[:partition] ||= 0
+end
+
+
+def run_task(config)
+  consumers = init_consumers(config)
+
+  if config[:count_messages]
+    print_message_count(consumers, config)
+  else
+    print_messages(consumers, config)
+  end
+end
+
+
+def init_consumers(config)
+  if config[:partitions].empty?
+    init_consumers_for_all_partitions(config)
+
+  else
+    config[:partitions].map do |partition|
+      Krump::KafkaConsumer.new(
+        config[:brokers],
+        config[:topic],
+        partition,
+        config[:offset]
+      )
+    end
+  end
+end
+
+
+# Normally you'd need to know the Zookeeper particulars to get a list of
+# available partitions. To keep the configuration simple, this simply loops
+# until it exceeds the max partition.
+def init_consumers_for_all_partitions(config)
+  consumers = []
+  partition = 0
+
+  loop do
+    consumers << Krump::KafkaConsumer.new(
+      config[:brokers],
+      config[:topic],
+      partition,
+      config[:offset]
+    )
+    partition += 1
+  end
+rescue Poseidon::Errors::UnknownTopicOrPartition
+  consumers
+end
+
+
+def print_message_count(consumers, config)
+  config[:offset] = :latest_offset
+
+  earliest_offset_consumers = consumers
+  latest_offset_consumers = init_consumers(config)
+
+  earliest_offset_consumers.zip(latest_offset_consumers).each do |earliest, latest|
+    msg_count = latest.consumer.next_offset - earliest.consumer.next_offset
+    puts "#{config[:topic]} | Partition #{latest.partition} | #{msg_count} messages"
+  end
+end
+
+
+def print_messages(consumers, config)
+  loop do
+    consumers.each do |consumer|
+      messages = consumer.fetch
+
+      if consumer.last_fetch_size > 0
+        print_header(config, consumer) unless config[:skip_header]
+
+        messages.each do |msg|
+          output = format_message(config, msg)
+          puts output if config[:read_count].nil? || consumer.messages_read < config[:read_count]
+          consumer.messages_read += 1
+        end
+      end
+    end
+
+    break if finished_consuming?(config, consumers)
+    sleep 1 if nothing_fetched?(consumers)
+  end
+rescue Interrupt
+end
+
+
+def print_header(config, consumer)
+  puts "===== Topic: #{config[:topic]} = Partition: #{consumer.partition} ======="
+end
+
+
+def format_message(config, msg)
+  if config[:print_offset]
+    "#{msg.offset} | #{msg.value}"
+  else
+    msg.value
+  end
+end
+
+
+def finished_consuming?(config, consumers)
+  (config[:read_count] && all_consumers_exceeded_read_count?(config[:read_count], consumers)) ||
+  (config[:dump] && nothing_fetched?(consumers))
+end
+
+
+def all_consumers_exceeded_read_count?(read_count, consumers)
+  consumers.all? { |consumer| consumer.messages_read >= read_count }
+end
+
+
+def nothing_fetched?(consumers)
+  consumers.all? { |consumer| consumer.last_fetch_size == 0 }
+end
+
+
+
+if $0 == __FILE__
+  config = init_config
+
+  if config[:gateway_hostname]
+    ssh_tunnels = Krump::SshTunnels.new(
+      config[:gateway_hostname],
+      config[:gateway_user],
+      config[:gateway_identityfile],
+      config[:ssh_tunnel_info]
+    )
+    ssh_tunnels.open { run_task(config) }
+  else
+    run_task(config)
+  end
+end

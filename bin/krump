@@ -30,6 +30,7 @@ end
 
 def parse_opts
   opts = Trollop::options do
+    opt :environment, 'rc', :type => :string
     opt :brokers, 'List (space separated) of Kafka brokers', :type => :strings
     opt :topic, 'Kafka topic', :type => :string, :required => true
     opt :partitions, 'List (space separated) of partions to consider', :type => :integers,
@@ -44,7 +45,6 @@ def parse_opts
     opt :dump, 'Exit after printing the available messages'
     opt :count_messages, 'Display the number of messages on a topic'
     opt :config_file, 'File containing environment settings', :default => '~/.krump'
-    opt :environment, 'rc', :type => :string
     opt :gateway_host, 'Host alias (from SSH config file) for gateway server in front of the ' +
         'Kafka cluster', :type => :string
     opt :gateway_hostname, 'Hostname for gateway server in front of the Kafka cluster',

@@ -193,18 +193,16 @@ end
 
 
 
-if $0 == __FILE__
-  config = init_config
+config = init_config
 
-  if config[:gateway_hostname]
-    ssh_tunnels = Krump::SshTunnels.new(
-      config[:gateway_hostname],
-      config[:gateway_user],
-      config[:gateway_identityfile],
-      config[:ssh_tunnel_info]
-    )
-    ssh_tunnels.open { run_task(config) }
-  else
-    run_task(config)
-  end
+if config[:gateway_hostname]
+  ssh_tunnels = Krump::SshTunnels.new(
+    config[:gateway_hostname],
+    config[:gateway_user],
+    config[:gateway_identityfile],
+    config[:ssh_tunnel_info]
+  )
+  ssh_tunnels.open { run_task(config) }
+else
+  run_task(config)
 end

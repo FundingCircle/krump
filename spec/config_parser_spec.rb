@@ -5,6 +5,7 @@ require 'krump/config_parser'
 module Krump
   describe ConfigParser do
     CONFIG_FILE = '/tmp/krump_test_config'
+    MIN_EPHEMERAL_PORT = 32768
 
     describe '#parse' do
       subject(:parser) { ConfigParser.new(CONFIG_FILE, 'rspec') }
@@ -45,9 +46,11 @@ module Krump
         File.open(CONFIG_FILE, 'w') do |fh|
           fh.puts 'rspec.kafka_broker=kafka:9092'
         end
-        broker = parser.parse[:brokers].first
+        config = parser.parse
+        broker = config[:brokers].first
 
         expect(broker).to eq('kafka:9092')
+        expect(config[:ssh_tunnel_info].size).to eq(0)
       end
 
       it 'parses multiple kafka brokers' do
@@ -66,56 +69,44 @@ module Krump
 
       it 'parses kafka broker with ssh tunnel info' do
         File.open(CONFIG_FILE, 'w') do |fh|
-          fh.puts 'rspec.kafka_broker=kafka:9092,9093'
+          fh.puts 'rspec.gateway_host=rspec-host'
+          fh.puts 'rspec.kafka_broker=kafka:9092'
         end
         config = parser.parse
 
         broker = config[:brokers].first
-        expect(broker).to eq('kafka:9092')
+        expect(broker).to match(/localhost:/)
 
         info = config[:ssh_tunnel_info].first
         expect(info.host).to eq('kafka')
         expect(info.port).to eq(9092)
-        expect(info.local_port).to eq(9093)
+        expect(info.local_port).to be >= MIN_EPHEMERAL_PORT
       end
 
       it 'parses multiple kafka brokers with ssh tunnel info' do
         File.open(CONFIG_FILE, 'w') do |fh|
-          fh.puts 'rspec.kafka_broker=kafka0:9092,9093'
-          fh.puts 'rspec.kafka_broker=kafka1:9092,9094'
-          fh.puts 'rspec.kafka_broker=kafka2:9092,9095'
+          fh.puts 'rspec.gateway_host=rspec-host'
+          fh.puts 'rspec.kafka_broker=kafka0:9092'
+          fh.puts 'rspec.kafka_broker=kafka1:9092'
+          fh.puts 'rspec.kafka_broker=kafka2:9092'
         end
         config = parser.parse
 
         brokers = config[:brokers]
         brokers.each_with_index do |broker, i|
-          expect(broker).to eq("kafka#{i}:9092")
+          expect(broker).to match(/localhost:/)
         end
+        expect(brokers).to match_array(brokers.uniq)
 
         tunnel_info = config[:ssh_tunnel_info]
         tunnel_info.each_with_index do |info, i|
           expect(info.host).to eq("kafka#{i}")
           expect(info.port).to eq(9092)
-          expect(info.local_port).to eq(9093 + i)
-        end
-      end
-
-      it 'parses a mix of brokers with and without ssh tunnel info' do
-        File.open(CONFIG_FILE, 'w') do |fh|
-          fh.puts 'rspec.kafka_broker=kafka0:9092'
-          fh.puts 'rspec.kafka_broker=kafka1:9092,9093'
-        end
-        config = parser.parse
-
-        brokers = config[:brokers]
-        brokers.each_with_index do |broker, i|
-          expect(broker).to eq("kafka#{i}:9092")
+          expect(info.local_port).to be >= MIN_EPHEMERAL_PORT
         end
 
-        info = config[:ssh_tunnel_info].first
-        expect(info.host).to eq('kafka1')
-        expect(info.port).to eq(9092)
-        expect(info.local_port).to eq(9093)
+        local_ports = tunnel_info.map { |info| info.local_port }
+        expect(local_ports).to match_array(local_ports.uniq)
       end
 
       it 'fails if an unsupported config option is set' do

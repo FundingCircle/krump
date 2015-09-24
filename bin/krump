@@ -3,7 +3,48 @@ require 'net/ssh'
 require 'trollop'
 require 'krump/config_parser'
 require 'krump/kafka_consumer'
+require 'krump/local_open_port'
 require 'krump/ssh_tunnels'
+
+
+def main(config, retries_left = 10)
+  if config[:gateway_hostname]
+    ssh_tunnels = Krump::SshTunnels.new(
+      config[:gateway_hostname],
+      config[:gateway_user],
+      config[:gateway_identityfile],
+      config[:ssh_tunnel_info]
+    )
+    ssh_tunnels.open { run_task(config) }
+  else
+    run_task(config)
+  end
+
+# Between the time a local port is assigned for an SSH tunnel and that tunnel is actually
+# opened, it's possible for a different application to use that port.
+rescue Errno::EADDRINUSE => e
+  raise e if retries_left == 0
+  set_new_port_for_port_in_use!(config, e)
+  retries_left =- 1
+  retry
+
+rescue Interrupt
+end
+
+
+def set_new_port_for_port_in_use!(config, e)
+  port_in_use = e.message[/port \d{5}/].split.last.to_i
+  new_port = Krump::LocalOpenPort.find
+
+  config[:brokers] = config[:brokers].map do |broker|
+    broker.split(':').last.to_i == port_in_use ? "localhost:#{new_port}" : broker
+  end
+
+  config[:ssh_tunnel_info] = config[:ssh_tunnel_info].map do |info|
+    info.local_port = new_port if info.local_port == port_in_use
+    info
+  end
+end
 
 
 def init_config
@@ -25,6 +66,8 @@ def init_config
 
   set_defaults!(config)
   config
+
+rescue Interrupt
 end
 
 
@@ -158,7 +201,6 @@ def print_messages(consumers, config)
     break if finished_consuming?(config, consumers)
     sleep 1 if nothing_fetched?(consumers)
   end
-rescue Interrupt
 end
 
 
@@ -192,17 +234,4 @@ def nothing_fetched?(consumers)
 end
 
 
-
-config = init_config
-
-if config[:gateway_hostname]
-  ssh_tunnels = Krump::SshTunnels.new(
-    config[:gateway_hostname],
-    config[:gateway_user],
-    config[:gateway_identityfile],
-    config[:ssh_tunnel_info]
-  )
-  ssh_tunnels.open { run_task(config) }
-else
-  run_task(config)
-end
+main(init_config)

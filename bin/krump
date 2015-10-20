@@ -87,6 +87,7 @@ def parse_opts
     opt :print_offset, 'Include offset number in output'
     opt :dump, 'Exit after printing the available messages'
     opt :count_messages, 'Display the number of messages on a topic'
+    opt :min_max_offset, 'Display the minimum and maximum offsets on a topic'
     opt :config_file, 'File containing environment settings', :default => '~/.krump'
     opt :gateway_host, 'Host alias (from SSH config file) for gateway server in front of the ' +
         'Kafka cluster', :type => :string
@@ -103,6 +104,10 @@ def parse_opts
     conflicts :gateway_host, :gateway_hostname
     conflicts :gateway_host, :gateway_user
     conflicts :gateway_host, :gateway_identityfile
+  end
+
+  if opts[:min_max_offset] && !opts[:count_messages]
+    Trollop::die :min_max_offset, "cannot be set unless --count-messages is set"
   end
 
   opts[:offset] = :earliest_offset if opts[:earliest_offset] || opts[:count_messages]
@@ -177,7 +182,11 @@ def print_message_count(consumers, config)
 
   earliest_offset_consumers.zip(latest_offset_consumers).each do |earliest, latest|
     msg_count = latest.consumer.next_offset - earliest.consumer.next_offset
-    puts "#{config[:topic]} | Partition #{latest.partition} | #{msg_count} messages"
+    output = "#{config[:topic]} | Partition #{latest.partition} | #{msg_count} messages"
+    if config[:min_max_offset]
+      output += " (#{earliest.consumer.next_offset}, #{latest.consumer.next_offset})"
+    end
+    puts output
   end
 end
 

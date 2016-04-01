@@ -73,7 +73,7 @@ end
 
 def parse_opts
   opts = Trollop::options do
-    opt :environment, 'rc', :type => :string
+    opt :environment, 'Which environment to use from the config file', :type => :string
     opt :brokers, 'List (space separated) of Kafka brokers', :type => :strings
     opt :topic, 'Kafka topic', :type => :string, :required => true
     opt :partitions, 'List (space separated) of partions to consider', :type => :integers,

@@ -16,10 +16,7 @@ This application was written because of a need for a `tail`-like way to consume 
 
 ## Installation
 
-    $ git clone git@github.com:FundingCircle/krump.git
-    $ cd krump
-    $ gem build krump.gemspec
-    $ gem install krump-0.2.0.gem
+    $ gem install krump
 
 ## Usage
 

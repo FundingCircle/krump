@@ -20,7 +20,7 @@ Gem::Specification.new do |spec|
   spec.executables   = 'krump'
   spec.require_paths = ['lib']
 
-  spec.add_dependency 'net-ssh-gateway', '~> 1.2'
+  spec.add_dependency 'net-ssh-gateway', '>= 1.2', '< 3.0'
   spec.add_dependency 'poseidon', '0.0.5'
   spec.add_dependency 'trollop', '~> 2.1'
 
